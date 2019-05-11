@@ -16,23 +16,24 @@
 // global W3C WoT Scripting API definitions
 import * as WoT from "wot-typescript-definitions";
 // node-wot implementation of W3C WoT Servient 
-import Servient from "@node-wot/core";
+import { Servient, Helpers } from "@node-wot/core";
 // protocols used
 import { HttpServer } from "@node-wot/binding-http";
 import { WebSocketServer } from "@node-wot/binding-websockets";
 import { CoapServer } from "@node-wot/binding-coap";
+import { MqttBrokerServer } from "@node-wot/binding-mqtt"; 
 import { FileClientFactory } from "@node-wot/binding-file";
 import { HttpClientFactory } from "@node-wot/binding-http";
 import { HttpsClientFactory } from "@node-wot/binding-http";
 import { CoapClientFactory } from "@node-wot/binding-coap";
 import { CoapsClientFactory } from "@node-wot/binding-coap";
+import { MqttClientFactory }  from "@node-wot/binding-mqtt";
 
 export default class DefaultServient extends Servient {
 
-    private static readonly defaultServientConf = {
+    private static readonly defaultConfig = {
         servient: {
             clientOnly: false,
-            scriptDir: ".",
             scriptAction: false
         },
         http: {
@@ -44,36 +45,61 @@ export default class DefaultServient extends Servient {
         }
     }
 
-    public readonly config: any = DefaultServient.defaultServientConf;
+    public readonly config: any;
 
-    public constructor(config?: any) {
+    public constructor(clientOnly: boolean, config?: any) {
         super();
 
-        Object.assign(this.config, config);
-        // remove secrets from original for displaying config (still in copy on this)
-        delete config.credentials;
-        console.info("DefaultServient configured with", config);
+        // init config
+        this.config = (typeof config === "object") ? config : DefaultServient.defaultConfig;
+        if (!this.config.servient) this.config.servient = DefaultServient.defaultConfig.servient;
 
-        if (!this.config.servient.clientOnly) {
-            let httpServer = (typeof this.config.http.port === "number") ? new HttpServer(this.config.http.port) : new HttpServer();
-            this.addServer(httpServer);
-
-            // re-use httpServer (same port)
-            this.addServer(new WebSocketServer(httpServer));
-
-            // disabled in DefaultServient
-            //let coapServer = (typeof this.config.coap.port === "number") ? new CoapServer(this.config.coap.port) : new CoapServer();
-            //this.addServer(coapServer);
+        // apply flags
+        if (clientOnly) {
+            if (!this.config.servient) { this.config.servient = {}; }
+            this.config.servient.clientOnly = true;
         }
         
+        // load credentials from config
+        this.addCredentials(this.config.credentials);
+
+        // remove secrets from original for displaying config (already added)
+        if(this.config.credentials) delete this.config.credentials;
+
+        // display
+        console.info("DefaultServient configured with");
+        console.dir(this.config);
+
+        // apply config
+        if (typeof this.config.servient.staticAddress === "string") {
+            Helpers.setStaticAddress(this.config.servient.staticAddress);
+        }
+        if (!this.config.servient.clientOnly) {
+
+            if (this.config.http !== undefined) {
+                let httpServer = new HttpServer(this.config.http);
+                this.addServer(httpServer);
+
+                // re-use httpServer (same port)
+                this.addServer(new WebSocketServer(httpServer));
+            }
+            if (this.config.coap !== undefined) {
+                // var to reuse below in CoapClient
+                var coapServer = (typeof this.config.coap.port === "number") ? new CoapServer(this.config.coap.port) : new CoapServer();
+                this.addServer(coapServer);
+            }
+            if (this.config.mqtt !== undefined) {
+                let mqttBrokerServer = new MqttBrokerServer(this.config.mqtt.broker, (typeof this.config.mqtt.username === "string") ? this.config.mqtt.username : undefined, (typeof this.config.mqtt.password === "string") ? this.config.mqtt.password : undefined, (typeof this.config.mqtt.clientId === "string") ? this.config.mqtt.clientId : undefined);
+                this.addServer(mqttBrokerServer);
+            }
+        }
+
         this.addClientFactory(new FileClientFactory());
         this.addClientFactory(new HttpClientFactory(this.config.http));
         this.addClientFactory(new HttpsClientFactory(this.config.http));
-        this.addClientFactory(new CoapClientFactory());
+        this.addClientFactory(new CoapClientFactory(coapServer));
         this.addClientFactory(new CoapsClientFactory());
-
-        // loads credentials from the configuration
-        this.addCredentials(this.config.credentials);
+        this.addClientFactory(new MqttClientFactory());
     }
 
     /**
@@ -82,7 +108,7 @@ export default class DefaultServient extends Servient {
     public start(): Promise<WoT.WoTFactory> {
 
         return new Promise<WoT.WoTFactory>((resolve, reject) => {
-            super.start().then(myWoT => {
+            super.start().then((myWoT) => {
                 console.info("DefaultServient started");
 
                 // TODO think about builder pattern that starts with produce() ends with expose(), which exposes/publishes the Thing
@@ -91,17 +117,18 @@ export default class DefaultServient extends Servient {
                     "description": "node-wot CLI Servient",
                     "system": "${process.arch}"
                 }`)
-                    .addProperty("things", {
-                        writable: true,
-                        observable: false,
-                        type: "string"
-                    })
-                    .addAction("log", {
-                        input: { type: "string" },
-                        output: { type: "string" }
-                    })
-                    .setActionHandler(
+                    .addProperty(
+                        "things",
+                        {
+                            observable: false,
+                            type: "string"
+                        })
+                    .addAction(
                         "log",
+                        {
+                            input: { type: "string" },
+                            output: { type: "string" }
+                        },
                         (msg: any) => {
                             return new Promise((resolve, reject) => {
                                 console.info(msg);
@@ -109,11 +136,11 @@ export default class DefaultServient extends Servient {
                             });
                         }
                     )
-                    .addAction("shutdown", {
-                        output: { type: "string" }
-                    })
-                    .setActionHandler(
+                    .addAction(
                         "shutdown",
+                        {
+                            output: { type: "string" }
+                        },
                         () => {
                             return new Promise((resolve, reject) => {
                                 console.info("shutting down by remote");
@@ -125,12 +152,12 @@ export default class DefaultServient extends Servient {
 
                 if (this.config.servient.scriptAction) {
                     thing
-                        .addAction("runScript", {
-                            input: { type: "string" },
-                            output: { type: "string" }
-                        })
-                        .setActionHandler(
+                        .addAction(
                             "runScript",
+                            {
+                                input: { type: "string" },
+                                output: { type: "string" }
+                            },
                             (script: string) => {
                                 return new Promise((resolve, reject) => {
                                     console.log("runnig script", script);
@@ -141,13 +168,12 @@ export default class DefaultServient extends Servient {
                         );
                 }
 
-                // pass WoTFactory on
-                resolve(myWoT);
+                thing.expose().then(() => {
+                        // pass on WoTFactory
+                        resolve(myWoT);
+                    }).catch((err) => reject(err));
 
-            }).catch(err => {
-                console.trace(`error building CLI Management Thing: ${err}`);
-                reject(err)
-            });
+            }).catch((err) => reject(err));
         });
     }
 }

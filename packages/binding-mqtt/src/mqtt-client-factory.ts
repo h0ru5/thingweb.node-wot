@@ -13,29 +13,26 @@
  * SPDX-License-Identifier: EPL-2.0 OR W3C-20150513
  ********************************************************************************/
 
-import BasicResourceListener from "./basic-resource-listener";
-import ExposedThing from "../exposed-thing";
-
-import {ResourceListener, Content} from "./protocol-interfaces"
-import * as TD from "@node-wot/td-tools";
-import ContentSerdes from "../content-serdes";
 /**
- * Resource that provides a Thing Description
+ * Protocol test suite to test protocol implementations
  */
-export default class TDResourceListener extends BasicResourceListener implements ResourceListener {
 
-    private readonly thing : ExposedThing;
+import { ProtocolClientFactory, ProtocolClient } from "@node-wot/core";
+import MqttClient from "./mqtt-client";
 
-    constructor(thing : ExposedThing) {
-        super();
-        this.thing = thing;
+export default class MqttClientFactory implements ProtocolClientFactory {
+    
+    public readonly scheme: string = "mqtt";
+
+    getClient = (): ProtocolClient => {
+        return new MqttClient();
     }
 
-    public getType(): string {
-        return "TD";
+    init(): boolean {
+        return true;
     }
 
-    public onRead() : Promise<Content> {
-        return Promise.resolve({ mediaType: "application/ld+json", body: new Buffer(this.thing.getThingDescription()) });
+    destroy(): boolean {
+        return true;
     }
 }

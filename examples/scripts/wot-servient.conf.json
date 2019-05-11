@@ -1,11 +1,22 @@
 {
     "servient": {
+        "_staticAddress": "plugfest.thingweb.io",
         "scriptDir": ".",
         "scriptAction": true
     },
     "http": {
         "port": 8080,
         "allowSelfSigned": true
+    },
+    "coap": {
+        "port": 5683
+    },
+    "mqtt" : {
+        "broker" : "mqtt://test.mosquitto.org",
+        "username" : "username",
+        "password" : "password",
+	    "clientId" : "uniqueId",
+        "port": 1883 
     },
     "log": {
         "level": "info"
@@ -14,6 +25,10 @@
         "urn:dev:wot:org:eclipse:leshan": {
             "identity": "node-wot",
             "psk": "hello"
+        },
+        "urn:dev:wot:org:eclipse:cf-secure": {
+            "identity": "password",
+            "psk": "sesame"
         }
     }
 }

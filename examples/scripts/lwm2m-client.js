@@ -23,8 +23,8 @@ WoT.fetch("file://./leshan.jsonld").then( async (td) => {
 	console.info(td);
 	console.info("==========");
 
-	leshan.actions.register.run("</0/0>,</3/0>").then( (res) => {
-		console.info("Received:", res);
+	leshan.actions.register.invoke("</0/0>,</3/0>").then( (res) => {
+		console.info("Registered");
 	}).catch( (err) => {
 		console.error("Registration error:", err.message);
 	});

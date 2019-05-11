@@ -25,16 +25,25 @@ import { Subscription } from "rxjs/Subscription";
 // for Security definition
 import * as WoT from "wot-typescript-definitions";
 
-import { ProtocolClient, Content } from "@node-wot/core";
+import { ProtocolClient, Content, ContentSerdes } from "@node-wot/core";
 import { CoapForm, CoapRequestConfig, CoapOption } from "./coap";
+import CoapServer from "./coap-server";
 
 export default class CoapClient implements ProtocolClient {
 
   // FIXME coap Agent closes socket when no messages in flight -> new socket with every request
-  private readonly agent: any = new coap.Agent();
+  private readonly agent: any;
 
-  constructor() {
-    // Intentionally blank
+  constructor(server?: CoapServer) {
+    // if server is passed, feed its socket into the CoAP agent for socket re-use
+    this.agent = new coap.Agent(server ? { socket: server.getSocket() } : undefined);
+    
+    // WoT-specific content formats
+    coap.registerFormat(ContentSerdes.JSON_LD, 2100);
+    // TODO also register content fromat with IANA
+    // from experimental range for now
+    coap.registerFormat(ContentSerdes.TD, 65100);
+    // TODO need hook from ContentSerdes for runtime data formats
   }
 
   public toString(): string {
@@ -51,9 +60,12 @@ export default class CoapClient implements ProtocolClient {
       req.on("response", (res: any) => {
         console.log(`CoapClient received ${res.code} from ${form.href}`);
         console.debug(`CoapClient received Content-Format: ${res.headers["Content-Format"]}`);
-        console.debug(`CoapClient received headers: ${JSON.stringify(res.headers)}`);
-        let mediaType = res.headers["Content-Format"];
-        resolve({ mediaType: mediaType, body: res.payload });
+        
+        // FIXME does not work with blockwise because of node-coap
+        let contentType = res.headers["Content-Format"];
+        if (!contentType) contentType = form.contentType;
+        
+        resolve({ type: contentType, body: res.payload });
       });
       req.on("error", (err: Error) => reject(err));
       req.end();
@@ -75,7 +87,7 @@ export default class CoapClient implements ProtocolClient {
         resolve();
       });
       req.on("error", (err: Error) => reject(err));
-      req.setOption("Content-Format", content.mediaType);
+      req.setOption("Content-Format", content.type);
       req.write(content.body);
       req.end();
     });
@@ -92,12 +104,12 @@ export default class CoapClient implements ProtocolClient {
         console.log(`CoapClient received ${res.code} from ${form.href}`);
         console.debug(`CoapClient received Content-Format: ${res.headers["Content-Format"]}`);
         console.debug(`CoapClient received headers: ${JSON.stringify(res.headers)}`);
-        let mediaType = res.headers["Content-Format"];
-        resolve({ mediaType: mediaType, body: res.payload });
+        let contentType = res.headers["Content-Format"];
+        resolve({ type: contentType, body: res.payload });
       });
       req.on("error", (err: Error) => reject(err));
       if (content) {
-        req.setOption("Content-Format", content.mediaType);
+        req.setOption("Content-Format", content.type);
         req.write(content.body);
       }
       req.end();
@@ -122,8 +134,28 @@ export default class CoapClient implements ProtocolClient {
   }
 
   public subscribeResource(form: CoapForm, next: ((value: any) => void), error?: (error: any) => void, complete?: () => void): any {
-    error(new Error(`CoapClient does not implement subscribe`));
-    return null;
+    let req = this.generateRequest(form, "GET", true);
+
+    console.log(`CoapClient sending ${req.statusCode} to ${form.href}`);
+
+    req.on("response", (res: any) => {
+      console.log(`CoapClient received ${res.code} from ${form.href}`);
+      console.debug(`CoapClient received Content-Format: ${res.headers["Content-Format"]}`);
+
+      // FIXME does not work with blockwise because of node-coap
+      let contentType = res.headers["Content-Format"];
+      if (!contentType) contentType = form.contentType;
+
+      res.on('data', (data: any) => {
+        next({ type: contentType, body: res.payload });
+      });
+    });
+
+    req.on("error", (err: any) => error(err));
+
+    req.end();
+
+    return new Subscription( () => {} );
   }
 
   public start(): boolean {
@@ -154,7 +186,7 @@ export default class CoapClient implements ProtocolClient {
     return options;
   }
 
-  private generateRequest(form: CoapForm, dflt: string): any {
+  private generateRequest(form: CoapForm, dflt: string, observable: boolean = false): any {
 
     let options: CoapRequestConfig = this.uriToOptions(form.href);
 
@@ -170,16 +202,14 @@ export default class CoapClient implements ProtocolClient {
         default: console.warn("CoapClient got invalid 'methodCode', using default", options.method);
       }
     }
+    options.observe = observable;
 
     let req = this.agent.request(options);
 
-    console.log(`CoapClient applying form`);
-    //console.dir(form);
-
     // apply form data
-    if (typeof form.mediaType === "string") {
-      console.log("CoapClient got Form 'mediaType'", form.mediaType);
-      req.setOption("Accept", form.mediaType);
+    if (typeof form.contentType === "string") {
+      console.log("CoapClient got Form 'contentType'", form.contentType);
+      req.setOption("Accept", form.contentType);
     }
     if (Array.isArray(form["coap:options"])) {
       console.log("CoapClient got Form 'options'", form["coap:options"]);

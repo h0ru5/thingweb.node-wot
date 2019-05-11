@@ -18,23 +18,23 @@ import * as WoT from "wot-typescript-definitions";
 import * as TD from "@node-wot/td-tools";
 
 import Servient from "./servient";
-import * as Helpers from "./helpers";
+import Helpers from "./helpers";
 
-import { ProtocolClient } from "./resource-listeners/protocol-interfaces";
+import { ProtocolClient, Content } from "./protocol-interfaces";
 
-import ContentSerdes from "./content-serdes"
+import { default as ContentManager } from "./content-serdes"
 
 import { Subscribable } from 'rxjs/Observable';
 import { Subscription } from 'rxjs/Subscription';
 
 export default class ConsumedThing extends TD.Thing implements WoT.ConsumedThing {
 
-    /** A map of interactable Thing Properties with get()/set() functions */
+    /** A map of interactable Thing Properties with read()/write()/subscribe() functions */
     properties: {
         [key: string]: WoT.ThingProperty
     };
 
-    /** A map of interactable Thing Actions with run() function */
+    /** A map of interactable Thing Actions with invoke() function */
     actions: {
         [key: string]: WoT.ThingAction;
     }
@@ -73,7 +73,7 @@ export default class ConsumedThing extends TD.Thing implements WoT.ConsumedThing
     }
     
     // utility for Property, Action, and Event
-    getClientFor(forms: Array<TD.Form>): ClientAndForm {
+    getClientFor(forms: Array<TD.Form>, op:string): ClientAndForm {
         if (forms.length === 0) {
             throw new Error(`ConsumedThing '${this.name}' has no links for this interaction`);
         }
@@ -86,6 +86,21 @@ export default class ConsumedThing extends TD.Thing implements WoT.ConsumedThing
             console.debug(`ConsumedThing '${this.name}' chose cached client for '${schemes[cacheIdx]}'`);
             let client = this.getClients().get(schemes[cacheIdx]);
             let form = forms[cacheIdx];
+           
+            // find right operation and corresponding scheme in the array form
+            for(let f of forms) {
+                if(f.op!=undefined)
+                if(f.op.indexOf(op) !=-1 && f.href.indexOf(schemes[cacheIdx]+":")!=-1) {
+                    form = f;
+                    break;
+                }
+            }
+
+            // if there no op was defined use default assignment
+            if(form==null) {
+                form = forms[cacheIdx];
+            }
+
             return { client: client, form: form };
         } else {
             // new client
@@ -97,37 +112,38 @@ export default class ConsumedThing extends TD.Thing implements WoT.ConsumedThing
             let client = this.getServient().getClientFor(schemes[srvIdx]);
             console.log(`ConsumedThing '${this.name}' got new client for '${schemes[srvIdx]}'`);
             
-            if (this.security) {
-                client.setSecurity(this.security, this.getServient().getCredentials(this.id));
+            if (this.security && this.securityDefinitions && Array.isArray(this.security) && this.security.length>0) {
+                console.log(`ConsumedThing '${this.name}' setting credentials for ${client}`);
+                let scs : Array<WoT.Security>;
+                for(let s of this.security) {
+                    let ws = this.securityDefinitions[s + ""]; // String vs. string (fix wot-typescript-definitions?)
+                    if(ws && ws.scheme !== "nosec") {
+                        scs.push(ws);
+                    }
+                }
+                client.setSecurity(scs, this.getServient().getCredentials(this.id));
             }
             this.getClients().set(schemes[srvIdx], client);
-            let form = forms[srvIdx];
+            //let form = forms[srvIdx];
+            let form = null;
+
+            // find right operation and corresponding scheme in the array form
+            for(let f of forms) {
+                if(f.op!=undefined)
+                if(f.op.indexOf(op) !=-1 && f.href.indexOf(schemes[srvIdx]+":")!=-1) {
+                    form = f;
+                    break;
+                }
+            }
+
+            // if there no op was defined use default assignment
+            if(form==null) {
+                form = forms[srvIdx];
+            }
+
             return { client: client, form: form }
         }
     }
-
-    // onPropertyChange(name: string): Observable<any> {
-    //     if (!this.observablesPropertyChange.get(name)) {
-    //         console.log("Create propertyChange observable for " + name);
-    //         this.observablesPropertyChange.set(name, new Subject());
-    //     }
-
-    //     return this.observablesPropertyChange.get(name).asObservable();
-    // }
-
-    // onEvent(name: string): Observable<any> {
-    //     if (!this.observablesEvent.get(name)) {
-    //         console.log("Create event observable for " + name);
-    //         this.observablesEvent.set(name, new Subject());
-    //     }
-
-    //     return this.observablesEvent.get(name).asObservable();
-    // }
-
-    // onTDChange(): Observable<any> {
-    //     return this.observablesTDChange.asObservable();
-    // }
-
 }
 
 export interface ClientAndForm {
@@ -135,7 +151,7 @@ export interface ClientAndForm {
     form: WoT.Form
 }
 
-class ConsumedThingProperty extends TD.PropertyFragment implements WoT.ThingProperty, WoT.BaseSchema {
+class ConsumedThingProperty extends TD.ThingProperty implements WoT.ThingProperty, WoT.BaseSchema {
 
     // functions for wrapping internal state
     private getName: () => string;
@@ -149,33 +165,39 @@ class ConsumedThingProperty extends TD.PropertyFragment implements WoT.ThingProp
         this.getThing = () => { return thing; }
     }
 
-    // get and set interface for the Property
-    get(): Promise<any> {
+    /** WoT.ThingProperty interface: read this Property of the remote Thing (async) */
+    public read(): Promise<any> {
         return new Promise<any>((resolve, reject) => {
-            // get right client
-            let { client, form } = this.getThing().getClientFor(this.forms);
+            // TODO pass expected form op to getClientFor()
+            let { client, form } = this.getThing().getClientFor(this.forms, "readproperty");
             if (!client) {
                 reject(new Error(`ConsumedThing '${this.getThing().name}' did not get suitable client for ${form.href}`));
             } else {
                 console.log(`ConsumedThing '${this.getThing().name}' reading ${form.href}`);
                 client.readResource(form).then((content) => {
-                    if (!content.mediaType) content.mediaType = form.mediaType;
-                    //console.log(`ConsumedThing decoding '${content.mediaType}' in readProperty`);
-                    let value = ContentSerdes.contentToValue(content);
-                    resolve(value);
+                    if (!content.type) content.type = form.contentType;
+                    try {
+                        let value = ContentManager.contentToValue(content, <any>this);
+                        resolve(value);
+                    } catch {
+                        reject(new Error(`Received invalid content from Thing`));
+                    }
                 })
                 .catch(err => { reject(err); });
             }
         });
     }
-    set(value: any): Promise<void> {
+
+    /** WoT.ThingProperty interface: write this Property of the remote Thing (async) */
+    public write(value: any): Promise<void> {
         return new Promise<void>((resolve, reject) => {
-            let { client, form } = this.getThing().getClientFor(this.forms);
+            // TODO pass expected form op to getClientFor()
+            let { client, form } = this.getThing().getClientFor(this.forms, "writeproperty");
             if (!client) {
                 reject(new Error(`ConsumedThing '${this.getThing().name}' did not get suitable client for ${form.href}`));
             } else {
                 console.log(`ConsumedThing '${this.getThing().name}' writing ${form.href} with '${value}'`);
-                let content = ContentSerdes.valueToContent(value, form.mediaType);
+                let content = ContentManager.valueToContent(value, <any>this, form.contentType);
 
                 client.writeResource(form, content).then(() => {
                     resolve();
@@ -184,9 +206,38 @@ class ConsumedThingProperty extends TD.PropertyFragment implements WoT.ThingProp
             }
         });
     }
+    
+    /** WoT.ThingProperty interface: subscribe to changes of this Property of the remote Thing */
+    public subscribe(next?: (value: any) => void, error?: (error: any) => void, complete?: () => void): Subscription {
+        // TODO pass expected form rel to getClientFor()
+        let { client, form } = this.getThing().getClientFor(this.forms, "observeproperty");
+        if (!client) {
+            error(new Error(`ConsumedThing '${this.getThing().name}' did not get suitable client for ${form.href}`));
+        } else {
+            console.log(`ConsumedThing '${this.getThing().name}' subscribing to ${form.href}`);
+
+            return client.subscribeResource(form,
+                (content) => {
+                    if (!content.type) content.type = form.contentType;
+                    try {
+                        let value = ContentManager.contentToValue(content, <any>this);
+                        next(value);
+                    } catch {
+                        error(new Error(`Received invalid content from Thing`));
+                    }
+                },
+                (err) => {
+                    error(err);
+                },
+                () => {
+                    complete();
+                }
+            );
+        }
+    }
 }
 
-class ConsumedThingAction extends TD.ActionFragment implements WoT.ThingAction {
+class ConsumedThingAction extends TD.ThingAction implements WoT.ThingAction {
 
     // functions for wrapping internal state
     private getName: () => string;
@@ -200,9 +251,10 @@ class ConsumedThingAction extends TD.ActionFragment implements WoT.ThingAction {
         this.getThing = () => { return thing; }
     }
 
-    run(parameter?: any): Promise<any> {
+    /** WoT.ThingAction interface: invoke this Action on the remote Thing (async) */
+    public invoke(parameter?: any): Promise<any> {
         return new Promise<any>((resolve, reject) => {
-            let { client, form } = this.getThing().getClientFor(this.forms);
+            let { client, form } = this.getThing().getClientFor(this.forms, "invokeaction");
             if (!client) {
                 reject(new Error(`ConsumedThing '${this.getThing().name}' did not get suitable client for ${form.href}`));
             } else {
@@ -211,14 +263,26 @@ class ConsumedThingAction extends TD.ActionFragment implements WoT.ThingAction {
                 let input;
                 
                 if (parameter!== undefined) {
-                    input = ContentSerdes.valueToContent(parameter, form.mediaType);
+                    input = ContentManager.valueToContent(parameter, <any>this, form.contentType);
                 }
 
-                client.invokeResource(form, input).then((output: any) => {
+                client.invokeResource(form, input).then((content) => {
                     // infer media type from form if not in response metadata
-                    if (!output.mediaType) output.mediaType = form.mediaType;
-                    let value = ContentSerdes.contentToValue(output);
-                    resolve(value);
+                    if (!content.type) content.type = form.contentType;
+
+                    // check if returned media type is the same as expected media type (from TD)
+                    if(form.response) {
+                        if(content.type !== form.response.contentType) {
+                            reject(new Error(`Unexpected type in response`));
+                        }
+                    }
+                    
+                    try {
+                        let value = ContentManager.contentToValue(content, this.output);
+                        resolve(value);
+                    } catch {
+                        reject(new Error(`Received invalid content from Thing`));
+                    }
                 })
                 .catch(err => { reject(err); });
             }
@@ -226,7 +290,7 @@ class ConsumedThingAction extends TD.ActionFragment implements WoT.ThingAction {
     }
 }
 
-class ConsumedThingEvent extends TD.EventFragment implements Subscribable<any> {
+class ConsumedThingEvent extends TD.ThingEvent implements Subscribable<any> {
 
     // functions for wrapping internal state
     private getName: () => string;
@@ -240,26 +304,32 @@ class ConsumedThingEvent extends TD.EventFragment implements Subscribable<any> {
         this.getThing = () => { return thing; }
     }
 
-    public subscribe(next: ((value: any) => void), error?: (error: any) => void, complete?: () => void): Subscription {
+    /** WoT.ThingEvent interface: subscribe to this Event of the remote Thing */
+    public subscribe(next: (value: any) => void, error?: (error: any) => void, complete?: () => void): Subscription {
 
-        let { client, form } = this.getThing().getClientFor(this.forms);
-            if (!client) {
-                error(new Error(`ConsumedThing '${this.getThing().name}' did not get suitable client for ${form.href}`));
-            } else {
-                console.log(`ConsumedThing '${this.getThing().name}' subscribing to ${form.href}`);
+        let { client, form } = this.getThing().getClientFor(this.forms, "subscribeevent");
+        if (!client) {
+            error(new Error(`ConsumedThing '${this.getThing().name}' did not get suitable client for ${form.href}`));
+        } else {
+            console.log(`ConsumedThing '${this.getThing().name}' subscribing to ${form.href}`);
 
-                return client.subscribeResource(form,
-                    (content) => {
-                        if (!content.mediaType) content.mediaType = form.mediaType;
-                        next( ContentSerdes.contentToValue(content) );
-                    },
-                    (err) => {
-                        error(err);
-                    },
-                    () => {
-                        complete();
+            return client.subscribeResource(form,
+                (content) => {
+                    if (!content.type) content.type = form.contentType;
+                    try {
+                        let value = ContentManager.contentToValue(content, <any>this);
+                        next(value);
+                    } catch {
+                        error(new Error(`Received invalid content from Thing`));
                     }
-                );
-            }
+                },
+                (err) => {
+                    error(err);
+                },
+                () => {
+                    complete();
+                }
+            );
+        }
     }
 }

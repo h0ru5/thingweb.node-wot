@@ -13,101 +13,17 @@
  * SPDX-License-Identifier: EPL-2.0 OR W3C-20150513
  ********************************************************************************/
 
+import { Content } from "./protocol-interfaces";
+import JsonCodec from "./codecs/json-codec";
+import TextCodec from "./codecs/text-codec";
+import OctetstreamCodec from "./codecs/octetstream-codec";
+
 /** is a plugin for ContentSerdes for a specific format (such as JSON or EXI) */
 export interface ContentCodec {
   getMediaType(): string
-  bytesToValue(bytes: Buffer): any
-  valueToBytes(value: any): Buffer
+  bytesToValue(bytes: Buffer, schema: WoT.DataSchema, parameters?: {[key: string]: string}): any
+  valueToBytes(value: any, schema: WoT.DataSchema, parameters?: {[key: string]: string}): Buffer
 }
-
-export class Content {
-  public mediaType: string;
-  public body: Buffer;
-
-  constructor(mediaType: string, body: Buffer) {
-    this.mediaType = mediaType;
-    this.body = body;
-  }
-}
-
-
-
-/** default implementation offerin Json de-/serialisation */
-class JsonCodec implements ContentCodec {
-
-  private subMediaType: string;
-
-  constructor(subMediaType?: string) {
-    if (!subMediaType) {
-      this.subMediaType = ContentSerdes.DEFAULT; // 'application/json' 
-    } else {
-      this.subMediaType = subMediaType;
-    }
-  }
-
-  getMediaType(): string {
-    return this.subMediaType;
-  }
-
-  bytesToValue(bytes: Buffer): any {
-    //console.debug(`JsonCodec parsing '${bytes.toString()}'`);
-    let parsed: any;
-    try {
-      parsed = JSON.parse(bytes.toString());
-    } catch (err) {
-      if (err instanceof SyntaxError) {
-        if (bytes.byteLength == 0) {
-          // empty payload -> void/undefined
-          parsed = undefined;
-        } else {
-          // be relaxed about what is received -> string without quotes
-          parsed = bytes.toString();
-        }
-      } else {
-        throw err;
-      }
-    }
-    // remove legacy wrapping and use RFC 7159
-    if (parsed && parsed.value !== undefined) {
-      console.warn(`JsonCodec removing { value: ... } wrapper`);
-      parsed = parsed.value;
-    }
-    return parsed;
-  }
-
-  valueToBytes(value: any): Buffer {
-    //console.debug("JsonCodec serializing", value);
-    let body = "";
-    if (value !== undefined) {
-      body = JSON.stringify(value);
-    }
-    return new Buffer(body);
-  }
-}
-
-class TextCodec implements ContentCodec {
-  getMediaType(): string {
-    return 'text/plain'
-  }
-
-  bytesToValue(bytes: Buffer): any {
-    //console.debug(`TextCodec parsing '${bytes.toString()}'`);
-    let parsed: any;
-    parsed = bytes.toString();
-    return parsed;
-  }
-
-  valueToBytes(value: any): Buffer {
-    //console.debug(`TextCodec serializing '${value}'`);
-    let body = "";
-    if (value !== undefined) {
-      body = value;
-    }
-
-    return new Buffer(body);
-  }
-}
-
 
 /**
  * is a singleton that is used to serialize and deserialize data
@@ -117,86 +33,115 @@ export class ContentSerdes {
   private static instance: ContentSerdes;
 
   public static readonly DEFAULT: string = "application/json";
-  // provide DEFAULT also on instance
-  public readonly DEFAUT: string = ContentSerdes.DEFAULT;
+  public static readonly TD: string = "application/td+json";
+  public static readonly JSON_LD: string = "application/ld+json";
+  
   private codecs: Map<string, ContentCodec> = new Map();
+  private offered: Set<string> = new Set<string>();
   private constructor() { }
 
   public static get(): ContentSerdes {
     if (!this.instance) {
       this.instance = new ContentSerdes();
-      this.instance.addCodec(new JsonCodec());
-      this.instance.addCodec(new JsonCodec('application/senml+json'));
+      this.instance.addCodec(new JsonCodec(), true);
+      this.instance.addCodec(new JsonCodec("application/senml+json"));
       this.instance.addCodec(new TextCodec());
+      this.instance.addCodec(new OctetstreamCodec());
     }
     return this.instance;
   }
 
-  public addCodec(codec: ContentCodec) {
+  public static getMediaType(contentType: string): string {
+    
+    let parts = contentType.split(";");
+    return parts[0].trim();
+  }
+  public static getMediaTypeParameters(contentType: string): { [key: string]: string } {
+    let parts = contentType.split(";").slice(1);
+
+    // parse parameters into object
+    let params: { [key: string]: string } = {};
+    parts.forEach((p) => {
+      let eq = p.indexOf("=");
+
+      if (eq >= 0) {
+        params[p.substr(0, eq).trim()] = p.substr(eq + 1).trim();
+      } else {
+        // handle parameters without value
+        params[p.trim()] = null;
+      }
+    })
+
+    return params;
+  }
+
+  public addCodec(codec: ContentCodec, offered: boolean = false) {
     ContentSerdes.get().codecs.set(codec.getMediaType(), codec);
+    if (offered) ContentSerdes.get().offered.add(codec.getMediaType());
   }
 
   public getSupportedMediaTypes(): Array<string> {
     return Array.from(ContentSerdes.get().codecs.keys());
   }
 
-  public contentToValue(content: Content): any {
+  public getOfferedMediaTypes(): Array<string> {
+    return Array.from(ContentSerdes.get().offered);
+  }
 
-    if (content.mediaType === undefined) {
+  public contentToValue(content: Content, schema: WoT.DataSchema): any {
+
+    if (content.type === undefined) {
       if (content.body.byteLength > 0) {
         // default to application/json
-        content.mediaType = ContentSerdes.DEFAULT;
+        content.type = ContentSerdes.DEFAULT;
       } else {
         // empty payload without media type -> void/undefined (note: e.g., empty payload with text/plain -> "")
         return;
       }
     }
 
-    console.debug(`ContentSerdes deserializing from ${content.mediaType}`);
+    // split into media type and parameters
+    let mt = ContentSerdes.getMediaType(content.type);
+    let par = ContentSerdes.getMediaTypeParameters(content.type);
 
     // choose codec based on mediaType
-    let isolMediaType: string = this.isolateMediaType(content.mediaType);
+    if (this.codecs.has(mt)) {
+      console.debug(`ContentSerdes deserializing from ${content.type}`);
 
-    if (this.codecs.has(isolMediaType)) {
-
-      let codec = this.codecs.get(isolMediaType)
+      let codec = this.codecs.get(mt)
 
       // use codec to deserialize
-      let res = codec.bytesToValue(content.body);
+      let res = codec.bytesToValue(content.body, schema, par);
 
       return res;
 
     } else {
-      console.warn(`ContentSerdes passthrough due to unsupported deserialization format '${isolMediaType}'`);
+      console.warn(`ContentSerdes passthrough due to unsupported media type '${mt}'`);
       return content.body.toString();
     }
   }
-  public isolateMediaType(mediaTypeValue: string): string {
-    let semiColumnIndex = mediaTypeValue.indexOf(';');
-    if (semiColumnIndex > 0) {
-      return mediaTypeValue.substring(0, semiColumnIndex);
-    } else {
-      return mediaTypeValue;
-    }
-  }
 
-  public valueToContent(value: any, mediaType = ContentSerdes.DEFAULT): Content {
+  public valueToContent(value: any, schema: WoT.DataSchema, contentType = ContentSerdes.DEFAULT): Content {
 
     if (value === undefined) console.warn("ContentSerdes valueToContent got no value");
 
     let bytes = null;
 
+    // split into media type and parameters
+    let mt = ContentSerdes.getMediaType(contentType);
+    let par = ContentSerdes.getMediaTypeParameters(contentType);
+
     // choose codec based on mediaType
-    if (this.codecs.has(mediaType)) {
-      console.debug(`ContentSerdes serializing to ${mediaType}`);
-      let codec = this.codecs.get(mediaType);
-      bytes = codec.valueToBytes(value);
+    if (this.codecs.has(mt)) {
+      console.debug(`ContentSerdes serializing to ${contentType}`);
+      let codec = this.codecs.get(mt);
+      bytes = codec.valueToBytes(value, schema, par);
     } else {
-      console.warn(`ContentSerdes passthrough due to unsupported serialization format '${mediaType}'`);
-      bytes = new Buffer(value);
+      console.warn(`ContentSerdes passthrough due to unsupported serialization format '${contentType}'`);
+      bytes = Buffer.from(value);
     }
 
-    return { mediaType: mediaType, body: bytes };
+    return { type: contentType, body: bytes };
   }
 }
 

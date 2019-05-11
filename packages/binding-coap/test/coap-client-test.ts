@@ -22,75 +22,46 @@ import { expect, should, assert } from "chai";
 // should must be called to augment all variables
 should();
 
-import { ResourceListener, BasicResourceListener, Content, ContentSerdes } from "@node-wot/core";
+import { Content, ContentSerdes, Helpers, ExposedThing } from "@node-wot/core";
 
 import CoapServer from "../src/coap-server";
 import CoapClient from "../src/coap-client";
-
-class TestResourceListener extends BasicResourceListener implements ResourceListener {
-
-    public referencedVector: any;
-    constructor(vector: any) {
-        super();
-        this.referencedVector = vector;
-    }
-
-    public onRead(): Promise<Content> {
-        this.referencedVector.expect = "GET";
-        return new Promise<Content>(
-            (resolve, reject) => resolve({ mediaType: ContentSerdes.DEFAULT, body: new Buffer("TEST") })
-        );
-    }
-
-    public onWrite(content: Content): Promise<void> {
-        this.referencedVector.expect = "PUT";
-        return new Promise<void>((resolve, reject) => resolve())
-    }
-
-    public onInvoke(content: Content): Promise<Content> {
-        this.referencedVector.expect = "POST";
-        return new Promise<Content>(
-            (resolve, reject) => resolve({ mediaType: ContentSerdes.DEFAULT, body: new Buffer("TEST") })
-        );
-    }
-
-    public onUnlink(): Promise<void> {
-        this.referencedVector.expect = "DELETE";
-        return new Promise<void>(
-            (resolve, reject) => resolve()
-        );
-    }
-}
 
 @suite("CoAP client implementation")
 class CoapClientTest {
 
     @test async "should apply form information"() {
 
-        var testVector = { expect: "UNSET" }
+        let testThing = Helpers.extend({ name: "Test" }, new ExposedThing(null));
+        testThing.addProperty(
+            "test",
+            {},
+            "UNSET"
+        )
 
         let coapServer = new CoapServer(56833);
-        coapServer.addResource("/", new TestResourceListener(testVector));
 
-        await coapServer.start();
+        await coapServer.start(null);
         expect(coapServer.getPort()).to.equal(56833);
 
+        /*
+        coapServer.expose(testThing);
+
         let client = new CoapClient();
-        let representation;
 
         // read with POST instead of GET
-        representation = await client.readResource({
+        await client.readResource({
             href: "coap://localhost:56833/",
             "coap:methodCode": 2 // POST
         });
-        expect(testVector.expect).to.equal("POST");
+        expect(testThing.expect).to.equal("POST");
         testVector.expect = "UNSET";
 
         // write with POST instead of PUT
         representation = await client.writeResource({
             href: "coap://localhost:56833/",
             "coap:methodCode": 2 // POST
-        }, { mediaType: ContentSerdes.DEFAULT, body: new Buffer("test") });
+        }, { contentType: ContentSerdes.DEFAULT, body: Buffer.from("test") });
         expect(testVector.expect).to.equal("POST");
         testVector.expect = "UNSET";
 
@@ -98,7 +69,7 @@ class CoapClientTest {
         representation = await client.invokeResource({
             href: "coap://localhost:56833/",
             "coap:methodCode": 3 // PUT
-        }, { mediaType: ContentSerdes.DEFAULT, body: new Buffer("test") });
+        }, { contentType: ContentSerdes.DEFAULT, body: Buffer.from("test") });
         expect(testVector.expect).to.equal("PUT");
         testVector.expect = "UNSET";
 
@@ -106,10 +77,22 @@ class CoapClientTest {
         representation = await client.invokeResource({
             href: "coap://localhost:56833/",
             "coap:methodCode": 4 // DELETE
-        }, { mediaType: ContentSerdes.DEFAULT, body: new Buffer("test") });
+        }, { contentType: ContentSerdes.DEFAULT, body: Buffer.from("test") });
         expect(testVector.expect).to.equal("DELETE");
         testVector.expect = "UNSET";
+        */
 
         await coapServer.stop();
+    }
+
+    @test "should re-use port"(done: Function) {
+
+        let coapServer = new CoapServer(56834);
+        coapServer.start(null).then( () => {
+            let coapClient = new CoapClient(coapServer);
+            coapClient.readResource({ href: "coap://localhost:56834/" }).then( (res) => {
+                done();
+            });
+        });
     }
 }

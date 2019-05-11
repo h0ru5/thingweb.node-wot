@@ -16,36 +16,45 @@
 // global W3C WoT Scripting API definitions
 import * as WoT from "wot-typescript-definitions";
 
-export const DEFAULT_HTTP_CONTEXT: string = "http://w3c.github.io/wot/w3c-wot-td-context.jsonld";
-export const DEFAULT_HTTPS_CONTEXT: string = "https://w3c.github.io/wot/w3c-wot-td-context.jsonld";
+export const DEFAULT_CONTEXT: string = "http://www.w3.org/ns/td";
 export const DEFAULT_THING_TYPE: string = "Thing";
 
 /* TODOs / Questions
  ~ In Thing index structure could be read-only (sanitizing needs write access)
 */
 
+export class Versioning implements WoT.Versioning {
+  instance: string;
+}
+
 /** Implements the Thing Description as software object */
 export default class Thing implements WoT.ThingFragment {
   id: string;
   name: string;
   description: string;
-  security: Array<WoT.Security>;
-  base?: string;
+  descriptions: WoT.MultiLanguage;
+  securityDefinitions: {
+    [key: string]: WoT.Security;
+  };
+  security: Array<String>;
+  base: string;
+
   properties: {
-    [key: string]: WoT.PropertyFragment
+    [key: string]: WoT.ThingProperty;
   };
   actions: {
-    [key: string]: WoT.ActionFragment;
+    [key: string]: WoT.ThingAction;
   }
   events: {
-    [key: string]: WoT.EventFragment;
+    [key: string]: WoT.ThingEvent;
   }
-  links: Array<WoT.WebLink>;
+  links: Array<WoT.Link>;
+  forms: Array<WoT.Form>;
 
   [key: string]: any;
 
   constructor() {
-    this["@context"] = DEFAULT_HTTPS_CONTEXT;
+    this["@context"] = DEFAULT_CONTEXT;
     this["@type"] = DEFAULT_THING_TYPE;
     this.security = [];
     this.properties = {};
@@ -56,26 +65,38 @@ export default class Thing implements WoT.ThingFragment {
 }
 
 /** Basis from implementing the Thing Interaction descriptions for Property, Action, and Event */
-export abstract class InteractionFragment implements WoT.InteractionFragment {
-  label: string;
+export abstract class ThingInteraction implements WoT.InteractionFragment {
+  title: string;
+  titles: WoT.MultiLanguage;
   description: string;
+  descriptions: WoT.MultiLanguage;
+  scopes: Array<string>;
+  uriVariables: {
+    [key: string]: WoT.DataSchema;
+  }
+  security: Array<string>;
   forms: Array<Form>;
+
   [key: string]: any;
 }
 /** Implements the Thing Property description */
-export class PropertyFragment extends InteractionFragment implements WoT.PropertyFragment, WoT.BaseSchema {
-  writable: boolean;
+export class ThingProperty extends ThingInteraction implements WoT.PropertyFragment, WoT.BaseSchema {
+  // writable: boolean;
   observable: boolean;
   type: string;
 }
 /** Implements the Thing Action description */
-export class ActionFragment extends InteractionFragment implements WoT.ActionFragment {
+export class ThingAction extends ThingInteraction implements WoT.ActionFragment {
   input: WoT.DataSchema;
   output: WoT.DataSchema;
+  safe: boolean;
+  idempotent: boolean;
 }
 /** Implements the Thing Action description */
-export class EventFragment extends InteractionFragment implements WoT.EventFragment, WoT.BaseSchema {
-  type: string;
+export class ThingEvent extends ThingInteraction implements WoT.EventFragment {
+  subscription: WoT.DataSchema;
+  data: WoT.DataSchema;
+  cancellation: WoT.DataSchema;
 }
 
 /** Implements the Thing Security definitions */
@@ -85,16 +106,22 @@ export class Security implements WoT.SecurityScheme {
   proxyURI?: string;
 }
 
+export class ExpectedResponse implements WoT.ExpectedResponse {
+  contentType?: string;
+}
+
 /** Implements the Interaction Form description */
 export class Form implements WoT.Form {
   href: string;
-  subProtocol?: string;
-  mediaType?: string;
-  rel?: string;
-  security?: WoT.Security;
+  subprotocol?: string;
+  op?: string | Array<string>;
+  contentType?: string;
+  security?: Array<string>; // WoT.Security;
+  scopes?: Array<string>;
+  response?: ExpectedResponse;
 
-  constructor(href?: string, mediaType?: string) {
-    if (href) this.href = href;
-    if (mediaType) this.mediaType = mediaType;
+  constructor(href: string, contentType?: string) {
+    this.href = href;
+    if (contentType) this.contentType = contentType;
   }
 }

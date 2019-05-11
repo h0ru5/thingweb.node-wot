@@ -14,47 +14,27 @@
  ********************************************************************************/
 
 try {
-  var thing = WoT.produce({ name: "tempSensor" });
+  var thing = WoT.produce({ name: "DynamicThing" });
   // manually add Interactions
   thing
-    .addProperty(
-      "temperature",
-      {
-        type: "number"
-      },
-      0.0)
-    .addProperty(
-      "max",
-      {
-        type: "number"
-      },
-      0.0)
-    .addAction("reset")
-    .addEvent(
-      "onchange",
-      {
-        type: "number" 
+    .addAction(
+      "addProperty",
+      {},
+      () => {
+        console.log("Adding Property");
+        thing.addProperty("dynProperty", { type: "string" }, "available");
+        return new Promise((resolve, reject) => { resolve(); });
+      })
+    .addAction(
+      "remProperty",
+      {},
+      () => {
+        console.log("Removing Property");
+        thing.removeProperty("dynProperty");
+        return new Promise((resolve, reject) => { resolve(); });
       });
   
-  // add server functionality
-  thing.setActionHandler(
-    "reset",
-    () => {
-      console.log("Resetting maximum");
-      return thing.properties.max.set(0.0);
-    });
-  
   thing.expose();
-  
-  setInterval( async () => {
-    let mock = Math.random()*100;
-    thing.properties.temperature.set(mock);
-    let old = await thing.properties.max.get();
-    if (old < mock) {
-      thing.properties.max.set(mock);
-      thing.events.onchange.emit();
-    }
-  }, 1000);
   
 } catch (err) {
    console.log("Script error: " + err);

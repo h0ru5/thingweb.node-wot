@@ -23,24 +23,24 @@ import { expect, should } from "chai";
 should();
 
 import ContentSerdes from "../src/content-serdes";
-import {ContentCodec} from "../src/content-serdes";
+import { ContentCodec } from "../src/content-serdes";
 
-let checkJsonToJs = (value : any) : void => {
-        let jsonBuffer = new Buffer(JSON.stringify(value));
-        expect(ContentSerdes.contentToValue({ mediaType: "application/json", body: jsonBuffer })).to.deep.equal(value);
+let checkJsonToJs = (value: any): void => {
+    let jsonBuffer = Buffer.from(JSON.stringify(value));
+    expect(ContentSerdes.contentToValue({ type: "application/json", body: jsonBuffer }, { type: "object", properties: {} })).to.deep.equal(value);
 }
 
-let checkJsToJson = (value: any) : void => {
-        let jsonContent = ContentSerdes.valueToContent(value)
-        let reparsed = JSON.parse(jsonContent.body.toString());
-        expect(reparsed).to.deep.equal(value);
+let checkJsToJson = (value: any): void => {
+    let jsonContent = ContentSerdes.valueToContent(value, { type: "object", properties: {} })
+    let reparsed = JSON.parse(jsonContent.body.toString());
+    expect(reparsed).to.deep.equal(value);
 }
 
 /** Hodor will always return the String "Hodor" */
 class HodorCodec implements ContentCodec {
-    getMediaType() : string { return "text/hodor"; }
-    bytesToValue(bytes : Buffer) : any { return "Hodor"; }
-    valueToBytes(value : any) : Buffer { return new Buffer("Hodor"); }
+    getMediaType(): string { return "text/hodor"; }
+    bytesToValue(bytes: Buffer): any { return "Hodor"; }
+    valueToBytes(value: any): Buffer { return Buffer.from("Hodor"); }
 }
 
 @suite("testing JSON codec")
@@ -50,18 +50,18 @@ class SerdesTests {
         checkJsonToJs(42)
         checkJsonToJs("Hallo")
         checkJsonToJs(null)
-        checkJsonToJs({"foo" : "bar"})
-        checkJsonToJs({"answer" : 42})
-        checkJsonToJs({"pi" : 3.14})
+        checkJsonToJs({ "foo": "bar" })
+        checkJsonToJs({ "answer": 42 })
+        checkJsonToJs({ "pi": 3.14 })
     }
 
     @test "value to JSON"() {
         checkJsToJson(42)
         checkJsToJson("Hallo")
         checkJsToJson(null)
-        checkJsToJson({"foo" : "bar"})
-        checkJsToJson({"answer" : 42})
-        checkJsToJson({"pi" : 3.14})
+        checkJsToJson({ "foo": "bar" })
+        checkJsToJson({ "answer": 42 })
+        checkJsToJson({ "pi": 3.14 })
     }
 }
 
@@ -76,11 +76,11 @@ class SerdesCodecTests {
     }
 
     @test "new codec should serialize"() {
-        ContentSerdes.valueToContent("The meaning of Life", "text/hodor").body.toString().should.equal("Hodor")
+        ContentSerdes.valueToContent("The meaning of Life", { type: "string" }, "text/hodor").body.toString().should.equal("Hodor")
     }
 
     @test "new codec should deserialize"() {
-        let buffer = new Buffer("Some actual meaningful stuff")
-        ContentSerdes.contentToValue({ mediaType: "text/hodor", body: buffer }).should.deep.equal("Hodor")
+        let buffer = Buffer.from("Some actual meaningful stuff")
+        ContentSerdes.contentToValue({ type: "text/hodor", body: buffer }, { type: "string" }).should.deep.equal("Hodor")
     }
 }

@@ -27,33 +27,41 @@ export function parseTD(td: string, normalize?: boolean): Thing {
   // apply defaults as per WoT Thing Description spec
 
   if (thing["@context"] === undefined) {
-    thing["@context"] = TD.DEFAULT_HTTPS_CONTEXT;
+    thing["@context"] = TD.DEFAULT_CONTEXT;
   } else if (Array.isArray(thing["@context"])) {
     let semContext: Array<string> = thing["@context"];
-    if ( (semContext.indexOf(TD.DEFAULT_HTTPS_CONTEXT) === -1) &&
-         (semContext.indexOf(TD.DEFAULT_HTTP_CONTEXT) === -1) ) {
+    if (semContext.indexOf(TD.DEFAULT_CONTEXT) === -1) {
       // insert last
-      semContext.push(TD.DEFAULT_HTTPS_CONTEXT);
+      semContext.push(TD.DEFAULT_CONTEXT);
     }
+  } else if (thing["@context"] !== TD.DEFAULT_CONTEXT) {
+    let semContext: string | any = thing["@context"];
+    thing["@context"] = [semContext, TD.DEFAULT_CONTEXT];
   }
 
   if (thing["@type"] === undefined) {
-    thing["@type"] = "Thing";
+    thing["@type"] = TD.DEFAULT_THING_TYPE;
   } else if (Array.isArray(thing["@type"])) {
     let semTypes: Array<string> = thing["@type"];
-    if (semTypes.indexOf("Thing") === -1) {
+    if (semTypes.indexOf(TD.DEFAULT_THING_TYPE) === -1) {
       // insert first
-      semTypes.unshift("Thing");
+      semTypes.unshift(TD.DEFAULT_THING_TYPE);
     }
+  } else if (thing["@type"] !== TD.DEFAULT_THING_TYPE) {
+    let semType: string = thing["@type"];
+    thing["@type"] = [TD.DEFAULT_THING_TYPE, semType];
   }
 
   if (thing.properties !== undefined && thing.properties instanceof Object) {
     for (let propName in thing.properties) {
       let prop: WoT.PropertyFragment = thing.properties[propName];
-      if (prop.writable === undefined || typeof prop.writable !== "boolean") {
-        prop.writable = false;
+      if (prop.readOnly === undefined || typeof prop.readOnly !== "boolean") {
+        prop.readOnly = false;
       }
-      if (prop.observable == undefined || typeof prop.writable !== "boolean") {
+      if (prop.writeOnly === undefined || typeof prop.writeOnly !== "boolean") {
+        prop.writeOnly = false;
+      }
+      if (prop.observable == undefined || typeof prop.observable !== "boolean") {
         prop.observable = false;
       }
     }
@@ -86,7 +94,7 @@ export function parseTD(td: string, normalize?: boolean): Thing {
       // ensure forms mandatory forms field
       if (!thing[pattern][interaction].hasOwnProperty("forms")) throw new Error(`${interactionPatterns[pattern]} '${interaction}' has no forms field`);
       // ensure array structure internally
-      if (!Array.isArray(thing[pattern][interaction].forms)) thing[pattern][interaction].forms = [ thing[pattern][interaction].forms ];
+      if (!Array.isArray(thing[pattern][interaction].forms)) thing[pattern][interaction].forms = [thing[pattern][interaction].forms];
       for (let form of thing[pattern][interaction].forms) {
         // ensure mandatory href field
         if (!form.hasOwnProperty("href")) throw new Error(`Form of ${interactionPatterns[pattern]} '${interaction}' has no href field`);
@@ -99,7 +107,7 @@ export function parseTD(td: string, normalize?: boolean): Thing {
   }
 
   if (thing.hasOwnProperty("base")) {
-    if (normalize===undefined || normalize===true) {
+    if (normalize === undefined || normalize === true) {
       console.log(`parseTD() normalizing 'base' into 'forms'`);
 
       const url = require('url');
@@ -127,9 +135,61 @@ export function parseTD(td: string, normalize?: boolean): Thing {
 /** Serializes a Thing object into a TD */
 export function serializeTD(thing: Thing): string {
 
-  let td: string = JSON.stringify(thing);
+  let copy: any = JSON.parse(JSON.stringify(thing));
 
-  // TODO clean-ups
+  // clean-ups
+  if (!copy.security || copy.security.length === 0) {
+    copy.securityDefinitions = {
+      "nosec_sc": { "scheme": "nosec" }
+    };
+    copy.security = ["nosec_sc"];
+  }
+
+  if (copy.forms && copy.forms.length === 0) {
+    delete copy.forms;
+  }
+
+  if (copy.properties && Object.keys(copy.properties).length === 0) {
+    delete copy.properties;
+  } else if(copy.properties) {
+    // add mandatory fields (if missing): observable, writeOnly, and readOnly
+    for (let propName in copy.properties) {
+      let prop = copy.properties[propName];
+      if (prop.readOnly === undefined || typeof prop.readOnly !== "boolean") {
+        prop.readOnly = false;
+      }
+      if (prop.writeOnly === undefined || typeof prop.writeOnly !== "boolean") {
+        prop.writeOnly = false;
+      }
+      if (prop.observable == undefined || typeof prop.observable !== "boolean") {
+        prop.observable = false;
+      }
+    }
+  }
+
+  if (copy.actions && Object.keys(copy.actions).length === 0) {
+    delete copy.actions;
+  } else if (copy.actions) {
+    // add mandatory fields (if missing): idempotent and safe
+    for (let actName in copy.actions) {
+      let act = copy.actions[actName];
+      if (act.idempotent === undefined || typeof act.idempotent !== "boolean") {
+        act.idempotent = false;
+      }
+      if (act.safe === undefined || typeof act.safe !== "boolean") {
+        act.safe = false;
+      }
+    }
+  }
+  if (copy.events && Object.keys(copy.events).length === 0) {
+    delete copy.events;
+  }
+
+  if (copy.links && copy.links.length === 0) {
+    delete copy.links;
+  }
+
+  let td: string = JSON.stringify(copy);
 
   console.debug(`serializeTD() produced\n\`\`\`\n${td}\n\`\`\``);
 

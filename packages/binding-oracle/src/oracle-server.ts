@@ -17,8 +17,7 @@
  * CoAP Server based on coap by mcollina
  */
 
-import { ContentSerdes } from "@node-wot/core";
-import { ProtocolServer, ResourceListener, PropertyResourceListener, ActionResourceListener } from "@node-wot/core"
+import { ProtocolServer, Servient, ExposedThing } from "@node-wot/core"
 
 const dcl = require("iotcs-csl-js");
 
@@ -26,106 +25,66 @@ export default class OracleServer implements ProtocolServer {
 
   public readonly scheme: string = "oracle";
   public readonly activationId: string;
-  private readonly port: number = -1;
-  private readonly address: string = undefined;
   private server: any = undefined;
   private running: boolean = false;
   private failed: boolean = false;
 
-  private readonly resources: { [key: string]: ResourceListener } = {};
+  private readonly devices: { [key: string]: any } = {};
 
-
-  // TODO remove and use hook for application script (e.g., Thing metadata)
-  //private readonly hardcodedUrn: string = "urn:test:w3c-wot:testthing";
-  private readonly hardcodedUrn: string = "urn:dev:wot:siemens:festolive";
-  // TODO allow for dynamic Things whose device model is not registered yet (use case for .expose() function)
-  private device: any;
-  // TODO do not duplicate Interaction state down here -- client library design conflict
-  private readonly properties: Map<string, any> = new Map<string, any>();
-  private readonly actions: Map<string, any> = new Map<string, any>();
-
-  constructor(store: string = "W3CWOT-GATEWAY", password: string = "Wotf2fbj") {
+  constructor(store: string = "W3CWOT-GATEWAY", password: string = "Eclipse1") {
     this.activationId = store;
     this.server = new dcl.device.GatewayDevice(store, password);
   }
 
-  public addResource(path: string, res: ResourceListener): boolean {
-    if (this.resources[path] !== undefined) {
-      console.warn(`OracleServer ${this.activationId} already has ResourceListener '${path}' - skipping`);
-      return false;
-    } else {
+  public expose(thing: ExposedThing): Promise<void> {
 
-      // TODO debug-level
-      console.log(`OracleServer ${this.activationId} adding resource '${path}'`);
-      
-      if (res instanceof PropertyResourceListener) {
-        console.warn(`### OracleServer ${this.activationId} knows about Property ${res.name}`);
-
-        // .name does not exist on ResourceListener, hence here
-        this.resources[res.name] = res;
-
-      } else if (res instanceof ActionResourceListener) {
-        console.warn(`### OracleServer ${this.activationId} knows about Action ${res.name}`);
-
-        // .name does not exist on ResourceListener, hence here
-        this.resources[res.name] = res;
-      }
-
-      /* TODO: Events -- still need the wiring from .emitEvent() down to the ProtocolServers
-      // TODO: dynamically register Event URNs based on dynamic Device Models
-      if (properties.int > 90) {
-          console.log("ALERT: " + properties.int + " higher than 90");
-          var alert = this.thing.createAlert('urn:test:w3c-wot:testthing:alert-event');
-          alert.fields.cause = "Integer greater than 90";
-          alert.raise();
-        }
-      */
-
-      return true;
+    if (thing["iotcs:deviceModel"] === undefined) {
+      return new Promise<void>((resolve, reject) => {
+        reject(`OracleServer cannot expose Things without 'iotcs:deviceModel' field`);
+      });
     }
-  }
 
-  public removeResource(path: string): boolean {
-    // TODO debug-level
-    console.log(`OracleServer ${this.activationId} removing resource '${path}'`);
-    return delete this.resources[path];
-  }
-
-  public start(): Promise<void> {
-    console.info(`OracleServer starting with ${this.activationId}`);
-    return new Promise<void>( (resolve, reject) => {
-
+    return new Promise<void>((resolve, reject) => {
       if (this.server.isActivated()) {
-
-        // first resource added, lets set up the virtual device
-        // TODO create hook, so that Thing name and modelUrn form metadata can be received
-        this.getModel(this.hardcodedUrn).then( model => {
-          this.registerDevice(model).then( id => {
-            this.startDevice(id, model).then( () => {
+        // select model based on TD entry
+        this.getModel(thing["iotcs:deviceModel"]).then( model => {
+          this.registerDevice(thing, model).then( (id) => {
+            this.startDevice(id, model, thing).then( () => {
               resolve();
             });
           });
         }).catch( err => {
           reject(err);
         });
-        
-      } else {
-        
+      }
+    });
+  }
+
+  public start(servient: Servient): Promise<void> {
+    console.info(`OracleServer starting with ${this.activationId}`);
+    return new Promise<void>( (resolve, reject) => {
+
+      if (!this.server.isActivated()) {
         this.server.activate([], (device: any, error: Error) => {
           if (error) {
             reject(error);
-          }
-
-          this.server = device;
-          
-          if (this.server.isActivated()) {
-            console.debug(`OracleServer activated as ${this.activationId}`);
-            resolve();
           } else {
-            reject(new Error(`Could not activate`));
+            this.server = device;
+            console.dir(device);
+            
+            if (this.server.isActivated()) {
+              console.log(`OracleServer ${this.activationId} activated`);
+              resolve();
+            } else {
+              reject(new Error(`Could not activate`));
+            }
           }
         });
+      } else {
+        console.log(`OracleServer ${this.activationId} already activated`);
+        resolve();
       }
+
     });
   }
 
@@ -135,9 +94,9 @@ export default class OracleServer implements ProtocolServer {
       // stop promise handles all errors from now on
       try {
         this.server.close();
-        resolve();  
+        resolve();
       } catch(err) {
-        reject();
+        reject(new Error(`Could not stop`));
       }
     });
   }
@@ -153,115 +112,139 @@ export default class OracleServer implements ProtocolServer {
     return new Promise<void>( (resolve, reject) => {
       if (!this.server.isActivated()) {
         reject(new Error(`OracleServer ${this.activationId} not activated`));
-      }
-      this.server.getDeviceModel(modelUrn, (model: any, error: Error) => {
-        if (error) {
+      } else {
+        this.server.getDeviceModel(modelUrn, (model: any, error: Error) => {
+          if (error) {
             reject(error);
-        }
-        console.info(`OracleServer ${this.activationId} found Device Model`, modelUrn);
-        console.dir(model);
-        resolve(model);
-      });
+          } else {
+            console.info(`OracleServer ${this.activationId} found Device Model`, modelUrn);
+            console.dir(model);
+            resolve(model);
+          }
+        });
+      }
     });
   }
   
   /** enrolls device and returns id */
-  private registerDevice(model: any): Promise<any> {
-    // device allowed to realm
-    var hardwareId = `${this.activationId}-${model["name"]}`;
+  private registerDevice(thing: ExposedThing, model: any): Promise<any> {
 
-    console.log(`OracleServer ${this.activationId} enrolling '${hardwareId}'`);
+    console.log(`OracleServer ${this.activationId} enrolling '${thing.id}'`);
 
     return new Promise<void>( (resolve, reject) => {
       if (!this.server.isActivated()) {
         reject(new Error("OracleServer not activated"));
-      }
-    
-      this.server.registerDevice(
-        hardwareId,
-        {
-          description: "node-wot connected device",
-          manufacturer: "Eclipse Thingweb"
-        },
-        [model.urn],
-        function (id: any, error: Error) {
-          if (error) {
+      } else {
+        this.server.registerDevice(
+          thing.id,
+          /*
+           * Possible metadata fields
+           *
+            lib.device.GatewayDevice.DeviceMetadata = {
+              MANUFACTURER: 'manufacturer',
+              MODEL_NUMBER: 'modelNumber',
+              SERIAL_NUMBER: 'serialNumber',
+              DEVICE_CLASS: 'deviceClass',
+              PROTOCOL: 'protocol',
+              PROTOCOL_DEVICE_CLASS: 'protocolDeviceClass',
+              PROTOCOL_DEVICE_ID: 'protocolDeviceId'
+            }
+          */
+          {
+            description: "node-wot connected device",
+            manufacturer: "Eclipse Thingweb"
+          },
+          [model.urn],
+          (id: any, error: Error) => {
+            if (error) {
               reject(error);
+            } else {
+              console.log(`OracleServer ${this.activationId} registered '${id}'`);
+              resolve(id);
+            }
           }
-          if (id) {
-            console.log(`OracleServer registered '${id}'`);
-            resolve(id);
-          }
-        }
-      );
+        );
+      }
     });
   }
 
-  private startDevice(id: any, model: any): Promise<void> {
+  private startDevice(id: any, model: any, thing: ExposedThing): Promise<void> {
 
-    this.device = this.server.createVirtualDevice(id, model);
+    let device = this.server.createVirtualDevice(id, model);
+
+    thing.deviceID = id;
+
+    this.devices[id] = device;
 
     return new Promise<void>( (resolve, reject) => {
 
-      // "read" is there is only update push in iotcs
-      var send = async () => {
+      let updateInterval;
+      if (thing["iotcs:updateInterval"] && (typeof thing["iotcs:updateInterval"] === "number")) {
+        updateInterval = thing["iotcs:updateInterval"];
+      } else {
+        console.info(`### Oracle uses default Property update interval of 5000 ms`);
+        console.warn(`### TD can provide "iotcs:updateInterval" to configure interval (in ms)`);
+        updateInterval = 5000;
+      }
 
+      // Property "reads" are value updates to the cloud
+      setInterval( async () => {
         try {
           let attributes: any = {};
 
           // send all Thing-defined Properties, even if not in Device Model
-          for (let resName in this.resources) {
-            if (this.resources[resName] instanceof PropertyResourceListener) {
-              let content = await this.resources[resName].onRead();
-              // FIXME: csl is not a low-level server and does not expect bytes
-              attributes[resName] = ContentSerdes.get().contentToValue(content);
-            }
+          for (let propertyName in thing.properties) {
+            attributes[propertyName] = await thing.properties[propertyName].read();
           }
 
-          console.warn("### Oracle PROPERTY UPDATE");
+          console.info("### Oracle PROPERTY UPDATE for",thing.deviceID);
           console.dir(attributes);
 
-          this.device.update(attributes);
-        } catch(err) {
-          console.error("OracleServer onRead error: " + err);
+          device.update(attributes);
+        } catch (err) {
+          console.error("OracleServer read() error: " + err);
         }
-      };
-      // every 10 seconds...
-      setInterval(send, 10000);
+      }, updateInterval);
 
-      // attribute writes
-      this.device.onChange = (tupples: any) => {
+      // Property writes
+      device.onChange = (tupples: any) => {
         tupples.forEach( (tupple: any) => {
-          if (this.resources[tupple.attribute.id] instanceof PropertyResourceListener) {
-            console.warn(`### Thing has Property '${tupple.attribute.id}' for writing '${tupple.newValue}'`);
-            this.resources[tupple.attribute.id].onWrite({ mediaType: "application/json", body: tupple.newValue })
-              .catch( (err: any) => { console.error("Property write error: " + err) });
+          if (thing.properties[tupple.attribute.id] !== undefined) {
+            console.info(`### Thing '${thing.name}' has Property '${tupple.attribute.id}' for writing '${tupple.newValue}'`);
+            if (!thing.properties[tupple.attribute.id].readOnly) {
+              thing.properties[tupple.attribute.id]
+                .write(tupple.newValue)
+                .catch((err: any) => { console.error("Property write error: " + err) });
+            }
           }
         });
       };
 
-      // actions
+      // Actions
       // only wire Actions defined in Device Model
       for (let action of model.actions) {
-        console.warn(`### Oracle Device Model has action '${action.name}' / '${action.alias}'`);
-          this.device[action.name].onExecute = (param: any) => {
-            if (this.resources[action.name] instanceof ActionResourceListener) {
-              console.warn(`### Thing has Action '${action.name}'`);
-              this.resources[action.name].onInvoke({ mediaType: "application/json", body: param })
-                .catch( (err: any) => { console.error("Action invoke error: " + err) });
-              // No action results supported by Oracle
-            }
+        if (thing.actions[action.name] !== undefined) {
+          console.info(`### Thing '${thing.name}' has Action '${action.name}'`);
+          device[action.name].onExecute = (param: any) => {
+            console.info(`### Oracle called Action '${action.name}'`);
+            thing.actions[action.name]
+              .invoke(param)
+              .catch( (err: any) => { console.error("Action invoke error: " + err) });
+            // No action results supported by Oracle
+          }
+        } else {
+          console.warn(`### Oracle Device Model Action '${action.name}' not available on Thing '${thing.name}'`);
         }
       }
 
       // FIXME: unclear how errors work -- why do they have attribute values?
-      this.device.onError = (tupple: any) => {
+      device.onError = (tupple: any) => {
         var show = {
-            newValues: tupple.newValues,
-            tryValues: tupple.tryValues,
-            errorResponse: tupple.errorResponse
+          newValues: tupple.newValues,
+          tryValues: tupple.tryValues,
+          errorResponse: tupple.errorResponse
         };
-        console.warn("### Oracle ERROR");
+        console.error("### Oracle ERROR");
         console.dir(show);
       };
 

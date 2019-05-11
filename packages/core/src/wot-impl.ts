@@ -21,7 +21,8 @@ import * as TD from "@node-wot/td-tools";
 import Servient from "./servient";
 import ExposedThing from "./exposed-thing";
 import ConsumedThing from "./consumed-thing";
-import * as Helpers from "./helpers";
+import Helpers from "./helpers";
+import { ContentSerdes } from "./content-serdes";
 
 export default class WoTImpl implements WoT.WoTFactory {
     private srv: Servient;
@@ -45,13 +46,13 @@ export default class WoTImpl implements WoT.WoTFactory {
         return new Promise<WoT.ThingDescription>((resolve, reject) => {
             let client = this.srv.getClientFor(Helpers.extractScheme(uri));
             console.info(`WoTImpl fetching TD from '${uri}' with ${client}`);
-            client.readResource(new TD.Form(uri, "application/td+json"))
+            client.readResource(new TD.Form(uri, ContentSerdes.TD))
                 .then((content) => {
                     client.stop();
 
-                    if (content.mediaType !== "application/td+json" &&
-                        content.mediaType !== "application/ld+json" ) {
-                        console.warn(`WoTImpl received TD with media type '${content.mediaType}' from ${uri}`);
+                    if (content.type !== ContentSerdes.TD &&
+                        content.type !== ContentSerdes.JSON_LD ) {
+                        console.warn(`WoTImpl received TD with media type '${content.type}' from ${uri}`);
                     }
 
                     let td = content.body.toString();
@@ -93,7 +94,7 @@ export default class WoTImpl implements WoT.WoTFactory {
     isWoTThingDescription(arg: any): arg is WoT.ThingDescription {
         return arg.length !== undefined;
     }
-    isWoTThingTemplate(arg: any): arg is WoT.ThingFragment {
+    isWoTThingFragment(arg: any): arg is WoT.ThingFragment {
         return arg.name !== undefined;
     }
 
@@ -107,10 +108,11 @@ export default class WoTImpl implements WoT.WoTFactory {
         let newThing: ExposedThing;
 
         if (this.isWoTThingDescription(model)) {
-            let template = TD.parseTD(model, false);
+            // FIXME should be constrained version of TD.parseTD() that omits instance-specific parts (but keeps "id")
+            let template = JSON.parse(model);
             newThing = Helpers.extend(template, new ExposedThing(this.srv));
 
-        } else if (this.isWoTThingTemplate(model)) {
+        } else if (this.isWoTThingFragment(model)) {
             let template = Helpers.extend(model, new TD.Thing());
             newThing = Helpers.extend(template, new ExposedThing(this.srv));
 
@@ -118,6 +120,7 @@ export default class WoTImpl implements WoT.WoTFactory {
             throw new Error("Invalid Thing model: " + model);
         }
 
+        /*
         // ensure TD context
         if (typeof newThing["@context"]==="string") {
             if (newThing["@context"]!==TD.DEFAULT_HTTPS_CONTEXT &&
@@ -145,6 +148,7 @@ export default class WoTImpl implements WoT.WoTFactory {
         } else {
             console.error(`WoTImpl found illegal @context: ${newThing["@context"]}`);
         }
+        */
 
         // augment Interaction descriptions with interactable functions
         newThing.extendInteractions();
