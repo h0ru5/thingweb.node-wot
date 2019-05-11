@@ -229,6 +229,30 @@ export default class ExposedThing extends TD.Thing implements WoT.ExposedThing {
         }
         return this;
     }
+
+    /** @inheritDoc */
+    writeProperty(propertyName: string, value: any): Promise<void> {
+        if(this.properties[propertyName]) {
+            return this.properties[propertyName].write(value);
+        } else {
+            throw new Error(`ExposedThing '${this.name}' has no Property '${propertyName}'`);
+        }
+    }
+
+    /** @inheritDoc */
+    writeMultipleProperties(valueMap: { [key: string]: any }): Promise<void> {
+        let writes = Object.keys(valueMap).map(key => this.writeProperty(key,valueMap[key]));
+        return Promise.all(writes).then(() => {}) // needed to convert void[] => void
+    }
+    
+    /** @inheritDoc */
+    invokeAction(actionName: string, parameter?: any): Promise<any> {    
+        if(this.actions[actionName]) {
+            return this.actions[actionName].invoke(parameter);
+        } else {
+            throw new Error(`ExposedThing '${this.name}' has no Action '${actionName}'`);
+        }
+    }
 }
 
 class ExposedThingProperty extends TD.ThingProperty implements WoT.ThingProperty, WoT.BaseSchema {
